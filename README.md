@@ -21,20 +21,30 @@ must install the Playwright browsers after installing the package
 
 ## Installation
 
+### Package installation
+
 ```bash
-pip install -e .
-# or install directly from the repository:
 pip install git+https://github.com/overberne/slither-gym
+# or if building from source:
+pip install -e .
 ```
 
-- Install Playwright browsers (required):
+### Install Playwright browsers (required):
 
 ```bash
 python -m playwright install chromium
 ```
 
-If you encounter Playwright issues on your platform, refer to the
-Playwright documentation for platform-specific instructions.
+- If you encounter Playwright issues on your platform, refer to the Playwright documentation for platform-specific instructions.
+
+
+### Creating an environment
+
+```python
+import gymnasium
+import slither_gym
+env = gymnasium.make('slither_gym/Slither-v0')
+```
 
 ## Features
 
