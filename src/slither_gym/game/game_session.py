@@ -28,12 +28,13 @@ class GameSession:
     ``slither_gym.game.hooks.GameFunctions``) and translate their results to
     Python-native types.
     """
-    _playwright: Playwright
-    _browser: Browser
+
+    _browser: Browser | None
     _page: Page
 
     def __init__(
         self,
+        browser: Browser | None = None,
         headless: bool = True,
         slither_base_url: str = DEFAULT_BASE_URL,
         viewport: ViewportSize = {'width': 800, 'height': 600},
@@ -43,6 +44,8 @@ class GameSession:
 
         Parameters
         ----------
+        browser : playwright.Browser, optional
+            An existing browser instance to use.
         headless : bool, optional
             Whether to run the browser in headless mode, by default ``True``.
         slither_base_url : str, optional
@@ -58,11 +61,14 @@ class GameSession:
         injects the JavaScript hooks required by the environment. It also
         configures some default game settings (skin and quality).
         """
-        self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.launch(
-            headless=headless, args=['--disable-web-security']
-        )
-        self._page = self._browser.new_page(viewport=viewport)
+        if browser is None:
+            _playwright = sync_playwright().start()
+            browser = _playwright.chromium.launch(
+                headless=headless, args=['--disable-web-security']
+            )
+            self._browser = browser
+
+        self._page = browser.new_page(viewport=viewport)
         self._page.goto(slither_base_url)
         self._inject_hooks()
         self._page.evaluate(GameFunctions.SET_SKIN)
