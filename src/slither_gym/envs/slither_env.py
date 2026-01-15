@@ -1,68 +1,102 @@
 import time
-from typing import Any, Literal, SupportsFloat, TypedDict, cast
+from typing import Any, Literal, SupportsFloat, cast
 
 import gymnasium as gym
-import gymnasium.spaces as spaces
 import numpy as np
 from numpy.typing import NDArray
 
-from slither_gym.game import (
-    DEFAULT_BASE_URL,
+from slither_gym.envs._spaces import (
+    Action,
     Food,
-    GameSession,
-    GameState,
     MinimapSector,
-    Snake,
-    SnakeSegment,
+    Observation,
+    Slither,
+    SlitherSegment,
+    new_action_space,
+    new_observation_space,
 )
+from slither_gym.game import DEFAULT_BASE_URL, GameSession, GameState
 
-
-class Observation(TypedDict):
-    player_snake: Snake
-    enemy_snakes: list[Snake]
-    food: list[Food]
-    minimap: list[MinimapSector]
-    world_center: float
-    world_radius: float
-    time_since_last_decision: float
-
-
-class Action(TypedDict):
-    heading: NDArray[np.float32]
-    boost: np.int32
+# Normalising constants
+SLITHER_LENGTH_NORM = np.float32(50_000)
+DISTANCE_NORM = PERCEPTION_RADIUS = np.float32(10_000)  # Used for normalising all distances
+FOOD_SIZE_NORM = np.float32(50)
+SPEED_NORM = np.float32(14)
 
 
 class SlitherEnv(gym.Env[Observation, Action]):
     """
     Gymnasium environment wrapper for the Slither.io game.
 
-    This environment runs a Slither.io game in a browser instance (via Playwright)
-    and exposes a decision-driven interface where observations and actions are
-    sampled at a configurable frequency. Decisions (observe -> act) are
-    decoupled from rendering frames and are scheduled using a rolling
-    decision boundary to keep timing consistent across steps.
+    This environment controls a live Slither.io game instance running inside a
+    browser (via Playwright) and exposes a decision-driven reinforcement learning
+    interface. Environment steps are scheduled at a configurable decision
+    frequency and are decoupled from the browser render loop to ensure consistent
+    control timing under variable frame rates and network latency.
 
-    Observation structure (dict-like):
-    - ``player_snake``: information about the controlled snake (`Snake` TypedDict).
-    - ``enemy_snakes``: sequence of other snakes in the world (list of `Snake`).
-    - ``food``: list of food items (list of `Food`).
-    - ``minimap``: list of minimap sectors (list of `MinimapSector`), values are
-        normalised to [-1, 1].
-    - ``world_center``: single-value float for the world centre coordinate.
-    - ``world_radius``: single-value float for the world radius.
-    - ``time_since_last_decision``: float indicating elapsed time since the
-        previous decision (useful because the observations are polled from a
-        live game and may vary in latency).
+    Observations are sampled asynchronously from the running game and mapped
+    into a structured, normalized representation suitable for learning agents.
 
-    Action structure (dict-like):
-    - ``heading``: one-dimensional numpy array containing the heading in radians
-        (float32). The array shape is (1,).
-    - ``boost``: discrete flag (0 or 1) indicating whether boost is enabled.
+    Observation
+    -----------
+    The observation is a dictionary-like structure with the following entries:
 
-    The environment terminates when the controlled snake collides with the
-    world boundary or another snake. Rewards are computed from the change
-    in the in-game score, scaled by the ratio between the observed elapsed time
-    and the configured decision interval.
+    ``player`` : Slither
+        Observation of the controlled slither. Positions are expressed relative
+        to the map center and normalized by the world radius.
+
+    ``enemies`` : list[Slither]
+        Observations of visible enemy slithers. Positions and motion quantities
+        are expressed in the local reference frame of the player slither and
+        normalized by the perception radius.
+
+    ``food`` : list[Food]
+        Visible food and prey entities expressed in the player’s local reference
+        frame and normalized by the perception radius.
+
+    ``minimap`` : list[MinimapSector]
+        Coarse global spatial context indicating distant slither presence.
+        Coordinates are normalized to the range ``[-1, 1]`` relative to the map
+        center.
+
+    ``nearest_border_heading_sin`` : ndarray, shape (1,)
+        Sine of the heading angle from the player toward the nearest world border.
+
+    ``nearest_border_heading_cos`` : ndarray, shape (1,)
+        Cosine of the heading angle from the player toward the nearest world
+        border.
+
+    ``distance_to_border`` : ndarray, shape (1,)
+        Distance to the nearest world border, normalized by the perception
+        radius and capped at 1.
+
+    ``time_since_last_decision`` : ndarray, shape (1,)
+        Elapsed real time (in seconds) since the previous decision step. This is
+        included because observations are sampled from a live game and may vary
+        in latency.
+
+    Action
+    ------
+    The action is a dictionary-like structure with the following entries:
+
+    ``heading_sin`` : ndarray, shape (1,)
+        Sine of the desired heading angle. Together with ``heading_cos``, this
+        encodes the movement direction in a continuous, angle-invariant form.
+
+    ``heading_cos`` : ndarray, shape (1,)
+        Cosine of the desired heading angle.
+
+    ``boost`` : ndarray, shape (1,)
+        Binary flag indicating whether boost should be enabled (0 or 1).
+
+    Episode Termination
+    -------------------
+    An episode terminates when the controlled slither dies, either due to
+    collision with another slither or contact with the world boundary.
+
+    Reward
+    ------
+    Rewards are computed from the change in the in-game score between decision steps.
     """
 
     metadata = {'render_modes': ['human']}
@@ -120,30 +154,8 @@ class SlitherEnv(gym.Env[Observation, Action]):
             slither_base_url=slither_url,
             **kwargs,
         )
-
-        self.action_space = cast(
-            spaces.Space[Action],
-            spaces.Dict(
-                {
-                    'heading': spaces.Box(0.0, 2 * np.pi, (1,), dtype=np.float32),
-                    'boost': spaces.Discrete(2, dtype=np.int32),
-                }
-            ),
-        )
-        self.observation_space = cast(
-            spaces.Space[Observation],
-            spaces.Dict(
-                {
-                    'player_snake': _new_snake_space(),
-                    'enemy_snakes': spaces.Sequence(_new_snake_space()),
-                    'food': _new_food_space(),
-                    'minimap': _new_minimap_space(),
-                    'world_center': spaces.Box(0, 2**31 - 1, (1,), dtype=np.int32),
-                    'world_radius': spaces.Box(0, 2**31 - 1, (1,), dtype=np.int32),
-                    'time_since_last_decision': spaces.Box(0, 10, (1,), dtype=np.int32),
-                }
-            ),
-        )
+        self.action_space = new_action_space()
+        self.observation_space = new_observation_space()
 
     def reset(
         self, *, seed: int | None = None, options: dict[str, Any] | None = None
@@ -181,19 +193,12 @@ class SlitherEnv(gym.Env[Observation, Action]):
         self._game_session.wait_for_game_state(GameState.LOGIN_SCREEN)
         self._game_session.play(nickname=nickname)
         self._game_session.wait_for_game_state(GameState.PLAYING)
+
         player_count = self._game_session.get_player_count()
         game_data = self._game_session.poll_observation()
-        obs = Observation(
-            player_snake=game_data['player_snake'],
-            enemy_snakes=game_data['enemy_snakes'],
-            food=game_data['food'],
-            minimap=game_data['minimap'],
-            world_center=float(game_data['world_center']),
-            world_radius=float(game_data['world_radius']),
-            # Choose the theoretical interval as fill value
-            time_since_last_decision=self._decision_interval,
-        )
 
+        # Choose the theoretical interval as fill value for time since last decision.
+        obs = _map_observation(game_data, self._decision_interval)
         self._prev_decision_boundary = time.time()
         self._decision_boundary = time.time() + self._decision_interval
         self._current_score = game_data['score']
@@ -219,20 +224,27 @@ class SlitherEnv(gym.Env[Observation, Action]):
         ----------
         action : Action
             Action to apply. Expected keys:
-            - ``heading``: numpy array of shape (1,) with heading in radians.
-            - ``boost``: discrete flag (0 or 1) to enable boosting.
+            - ``heading_cos``: numpy array of shape (1,) with the cosine of
+              the heading in radians.
+            - ``heading_sin``: numpy array of shape (1,) with the sine of
+              the heading in radians.
+            - ``boost``: numpy array of shape (1,) with discrete flag (0 or 1)
+              to enable boosting.
 
         Returns
         -------
         tuple[Observation, float, bool, bool, dict[str, Any]]
             - ``observation``: Observation, fresh observation after applying the action.
-            - ``reward``: float, reward computed from score delta normalized by time.
+            - ``reward``: float, reward computed from score delta.
             - ``terminated``: bool, True if the episode ended (snake died or left world).
             - ``truncated``: bool, True if the episode was truncated (unused in this env).
             - ``info``: dict, additional runtime information (currently empty).
         """
         # Act
-        self._game_session.act(action['heading'][0], action['boost'] == 1)
+        self._game_session.act(
+            angle_rad=np.atan2(action['heading_sin'][0], action['heading_cos'][0]),
+            enable_boost=action['boost'][0] == 1,
+        )
 
         # Delay observation to set consistent decision timing.
         time_until_observation = self._decision_boundary - time.time()
@@ -248,23 +260,10 @@ class SlitherEnv(gym.Env[Observation, Action]):
         # - Use current time instead of boundary to determine next boundary.
         # - Subtract runtime to get actual frequency closer to frequency paraneter.
         self._decision_boundary = decision_time + self._decision_interval
-        obs = Observation(
-            player_snake=game_data['player_snake'],
-            enemy_snakes=game_data['enemy_snakes'],
-            food=game_data['food'],
-            minimap=game_data['minimap'],
-            world_center=float(game_data['world_center']),
-            world_radius=float(game_data['world_radius']),
-            time_since_last_decision=time_since_last_decision,
-        )
+        obs = _map_observation(game_data, time_since_last_decision)
 
-        # Reward based on score increase, normalised by time delta.
-        reward = (
-            (game_data['score'] - self._current_score)
-            * time_since_last_decision
-            / self._decision_interval
-        )
-        # reward = transition['score'] - self._current_score
+        # Reward based on score increase.
+        reward = game_data['score'] - self._current_score
         self._current_score = game_data['score']
         return obs, reward, game_data['terminated'], False, {}
 
@@ -276,63 +275,210 @@ class SlitherEnv(gym.Env[Observation, Action]):
         self._game_session.close()
 
 
-def _new_segment_space(seed: int | None = None) -> spaces.Space[SnakeSegment]:
+def _map_observation(game_data: dict[str, Any], time_since_last_decision: float) -> Observation:
+    world_center = float(game_data['world_center'])
+    world_radius = float(game_data['world_radius'])
+    player = game_data['player']
+    player_x = float(player['xx'])
+    player_y = float(player['yy'])
+    player_x_world_center_ref = player_x - world_center
+    player_y_world_center_ref = player_y - world_center
+    distance_to_center = np.sqrt(
+        player_x_world_center_ref**2 + player_y_world_center_ref**2, dtype=np.float32
+    )
+    nearest_border_cos = player_x_world_center_ref / distance_to_center
+    nearest_border_sin = player_y_world_center_ref / distance_to_center
+    distance_to_border = np.sqrt(
+        (player_x_world_center_ref - world_radius) ** 2
+        + (player_y_world_center_ref - world_radius) ** 2
+    )
+    distance_to_border = min(1, distance_to_border / PERCEPTION_RADIUS)
+    player_heading_cos = np.cos([player['heading']], dtype=np.float32)
+    player_heading_sin = np.sin([player['heading']], dtype=np.float32)
+
+    return Observation(
+        player=Slither(
+            x=np.array([player_x_world_center_ref / world_radius], dtype=np.float32),
+            y=np.array([player_x_world_center_ref / world_radius], dtype=np.float32),
+            heading_cos=player_heading_cos,
+            heading_sin=player_heading_sin,
+            speed=np.array([player['speed'] / SPEED_NORM], dtype=np.float32),
+            relative_heading_cos=np.ones((1,), dtype=np.float32),
+            relative_heading_sin=np.zeros((1,), dtype=np.float32),
+            relative_speed=np.zeros((1,), dtype=np.float32),
+            length=np.array([player['length'] / SLITHER_LENGTH_NORM], dtype=np.float32),
+            boosting=np.array([player['boosting']], dtype=np.int8),
+            segments=_map_segment_batched(
+                player['segments_x'],
+                player['segments_y'],
+                player_x,
+                player_y,
+                player_heading_cos[0],
+                player_heading_sin[0],
+            ),
+        ),
+        enemies=_map_enemies_batched(
+            game_data['enemies'], player_x, player_y, player['heading'], player['speed']
+        ),
+        food=_map_food_batched(
+            game_data['food'], player_x, player_y, player_heading_cos[0], player_heading_sin[0]
+        ),
+        minimap=[_map_minimap_sector(sector) for sector in game_data['minimap']],
+        nearest_border_sin=np.array([nearest_border_sin], dtype=np.float32),
+        nearest_border_cos=np.array([nearest_border_cos], dtype=np.float32),
+        distance_to_border=np.array([distance_to_border], dtype=np.float32),
+        time_since_last_decision=np.array([time_since_last_decision], dtype=np.float32),
+    )
+
+
+def _rotate_into_player_frame(
+    dx: NDArray[np.float32],
+    dy: NDArray[np.float32],
+    heading_cos: float,
+    heading_sin: float,
+) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
     return cast(
-        spaces.Space[SnakeSegment],
-        spaces.Dict(
-            {
-                'dx': spaces.Box(-np.inf, np.inf, (1,), dtype=np.float32),
-                'dy': spaces.Box(-np.inf, np.inf, (1,), dtype=np.float32),
-            },
-            seed=seed,
+        tuple[NDArray[np.float32], NDArray[np.float32]],  # Numpy promotion rules...
+        (
+            heading_cos * dx + heading_sin * dy,
+            -heading_sin * dx + heading_cos * dy,
         ),
     )
 
 
-def _new_snake_space(seed: int | None = None) -> spaces.Space[Snake]:
-    return cast(
-        spaces.Space[Snake],
-        spaces.Dict(
-            {
-                'x': spaces.Box(-np.inf, np.inf, (1,), dtype=np.float32),
-                'y': spaces.Box(-np.inf, np.inf, (1,), dtype=np.float32),
-                'speed': spaces.Box(0.0, 14.0, (1,), dtype=np.float32),
-                'heading': spaces.Box(0.0, 2 * np.pi, (1,), dtype=np.float32),
-                'intended_heading': spaces.Box(0.0, 2 * np.pi, (1,), dtype=np.float32),
-                'length': spaces.Box(0, 2**31 - 1, (1,), dtype=np.int32),
-                'boosting': spaces.Discrete(2, dtype=np.int32),
-                'segments': spaces.Sequence(_new_segment_space()),
-            },
-            seed=seed,
-        ),
+def _map_enemies_batched(
+    enemies: dict[str, list[Any]],
+    player_x: float,
+    player_y: float,
+    player_heading: float,
+    player_speed: float,
+) -> list[Slither]:
+    n = len(enemies["xx"])
+    if n == 0:
+        return []
+
+    enemy_x = np.asarray(enemies["xx"], dtype=np.float32)
+    enemy_y = np.asarray(enemies["yy"], dtype=np.float32)
+    speed = np.asarray(enemies["speed"], dtype=np.float32)
+    enemy_heading = np.asarray(enemies["heading"], dtype=np.float32)
+    length = np.asarray(enemies["length"], dtype=np.float32)
+    boosting = np.asarray(enemies["boosting"], dtype=np.int8)
+
+    dx = enemy_x - player_x
+    dy = enemy_y - player_y
+    player_heading_cos = np.cos(player_heading, dtype=np.float32)
+    player_heading_sin = np.sin(player_heading, dtype=np.float32)
+
+    enemy_x_player_frame, enemy_y_player_frame = _rotate_into_player_frame(
+        dx, dy, player_heading_cos, player_heading_sin
+    )
+    enemy_x_player_frame = enemy_x_player_frame / PERCEPTION_RADIUS
+    enemy_y_player_frame = enemy_y_player_frame / PERCEPTION_RADIUS
+    enemy_heading_cos = np.cos(enemy_heading, dtype=np.float32)
+    enemy_heading_sin = np.sin(enemy_heading, dtype=np.float32)
+
+    relative_heading = enemy_heading - player_heading
+    relative_heading_cos = np.cos(relative_heading, dtype=np.float32)
+    relative_heading_sin = np.sin(relative_heading, dtype=np.float32)
+    relative_speed = (speed - player_speed) / SPEED_NORM
+    speed = speed / SPEED_NORM
+
+    out: list[Slither] = []
+    for i in range(n):
+        out.append(
+            Slither(
+                x=enemy_x_player_frame[i : i + 1],
+                y=enemy_y_player_frame[i : i + 1],
+                heading_cos=enemy_heading_cos[i : i + 1],
+                heading_sin=enemy_heading_sin[i : i + 1],
+                speed=speed[i : i + 1],
+                relative_heading_cos=relative_heading_cos[i : i + 1],
+                relative_heading_sin=relative_heading_sin[i : i + 1],
+                relative_speed=relative_speed[i : i + 1],
+                length=length[i : i + 1] / SLITHER_LENGTH_NORM,
+                boosting=boosting[i : i + 1],
+                segments=_map_segment_batched(
+                    enemies['segments_x'][i],
+                    enemies['segments_y'][i],
+                    enemy_x[i],
+                    enemy_y[i],
+                    enemy_heading_cos[i],
+                    enemy_heading_sin[i],
+                ),
+            )
+        )
+    return out
+
+
+def _map_segment_batched(
+    segments_x: list[float],
+    segments_y: list[float],
+    x: float,
+    y: float,
+    heading_cos: float,
+    heading_sin: float,
+) -> list[SlitherSegment]:
+    n = len(segments_x)
+    if n == 0:
+        return []
+
+    segments_x_np, segments_y_np = _rotate_into_player_frame(
+        dx=(np.asarray(segments_x, dtype=np.float32) - x) / PERCEPTION_RADIUS,
+        dy=(np.asarray(segments_y, dtype=np.float32) - y) / PERCEPTION_RADIUS,
+        heading_cos=heading_cos,
+        heading_sin=heading_sin,
+    )
+    return [
+        SlitherSegment(
+            x=segments_x_np[i : i + 1],
+            y=segments_y_np[i : i + 1],
+        )
+        for i in range(n)
+    ]
+
+
+def _map_food_batched(
+    food: dict[str, list[float]],
+    player_x: float,
+    player_y: float,
+    player_heading_cos: float,
+    player_heading_sin: float,
+) -> list[Food]:
+    n = len(food["xx"])
+    if n == 0:
+        return []
+
+    food_x = np.asarray(food["xx"], dtype=np.float32)
+    food_y = np.asarray(food["yy"], dtype=np.float32)
+    size = np.asarray(food["size"], dtype=np.float32)
+
+    dx = food_x - player_x
+    dy = food_y - player_y
+    food_x_player_frame = (player_heading_cos * dx + player_heading_sin * dy) / PERCEPTION_RADIUS
+    food_y_player_frame = (-player_heading_sin * dx + player_heading_cos * dy) / PERCEPTION_RADIUS
+    size = size / FOOD_SIZE_NORM
+
+    return [
+        Food(
+            x=cast(NDArray[np.float32], food_x_player_frame[i : i + 1]),
+            y=cast(NDArray[np.float32], food_y_player_frame[i : i + 1]),
+            size=size[i : i + 1],
+        )
+        for i in range(n)
+    ]
+
+
+def _map_minimap_sector(sector: dict[str, Any]) -> MinimapSector:
+    return MinimapSector(
+        x=np.array([sector['x']], dtype=np.float32),
+        y=np.array([sector['y']], dtype=np.float32),
     )
 
 
-def _new_food_space(seed: int | None = None) -> spaces.Space[Food]:
-    return cast(
-        spaces.Space[Food],
-        spaces.Dict(
-            {
-                'x': spaces.Box(-np.inf, np.inf, (1,), dtype=np.float32),
-                'y': spaces.Box(-np.inf, np.inf, (1,), dtype=np.float32),
-                'size': spaces.Box(0, 2**31 - 1, (1,), dtype=np.int32),
-            },
-            seed=seed,
-        ),
-    )
+class SpaceMismatch(Exception):
+    """Raised when an observation does not match a Gymnasium space."""
 
-
-def _new_minimap_space(seed: int | None = None) -> spaces.Space[MinimapSector]:
-    return cast(
-        spaces.Space[MinimapSector],
-        spaces.Dict(
-            {
-                'x': spaces.Box(-1, 1, (1,), dtype=np.float32),
-                'y': spaces.Box(-1, 1, (1,), dtype=np.float32),
-            },
-            seed=seed,
-        ),
-    )
+    pass
 
 
 if __name__ == '__main__':
@@ -340,12 +486,9 @@ if __name__ == '__main__':
     env.reset()
 
     for i in range(360):
-        obs, reward, terminated, truncated, info = env.step(
-            Action(
-                heading=np.array([np.deg2rad(np.float32(i * 10 % 360))]),
-                boost=np.int32(0 if i > 180 else 1),
-            )
-        )
+        action = env.action_space.sample()
+        action['boost'][0] = 1
+        obs, reward, terminated, truncated, info = env.step(action)
 
         if terminated:
             print(f'Terminated after {i} steps')

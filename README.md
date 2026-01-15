@@ -49,11 +49,11 @@ env = gymnasium.make('slither_gym/Slither-v0')
 ## Features
 
 - Gymnasium-compatible environment `SlitherEnv` with `reset()` / `step()`.
-- Structured observations using TypedDicts (`player_snake`, `enemy_snakes`,
-  `food`, `minimap`, `world_center`, `world_radius`, `time_since_last_decision`).
-- Action space: continuous heading (radians) + discrete boost flag.
+- Structured observations using TypedDicts (`player`, `enemies`,
+  `food`, `minimap`, `nearest_border_cos`, `nearest_border_sin`,
+  `distance_to_border`, `time_since_last_decision`).
+- Action space: continuous heading expessed via sine and cosine + discrete boost flag.
 - Playwright-based `GameSession` exposing helpers to drive the in-page API.
-- Small wrappers included for ergonomic action spaces (trigonometric action).
 
 ## Quickstart
 
@@ -68,28 +68,13 @@ obs, info = env.reset()
 
 for step in range(1000):
     # Keep heading straight (example) and no boost
-    action = Action(heading=np.array([0.0], dtype=np.float32), boost=np.int32(0))
+    angle = np.deg2rad([45.0], dtype=np.float32)
+    sin, cos = np.sin(angle), np.cos(angle)
+    action = Action(heading_cos=cos, heading_sin=sin, boost=np.ones((1,), dtype=np.int8))
     obs, reward, terminated, truncated, info = env.step(action)
     if terminated:
         break
 
-env.close()
-```
-
-Using the trigonometric action wrapper, heading can be expressed as the sine and cosine of the angle:
-
-```python
-import numpy as np
-from slither_gym import SlitherEnv
-from slither_gym.wrappers.use_trigonometric_action import UseTrigonometricAction
-
-env = UseTrigonometricAction(SlitherEnv(render_mode=None))
-obs, info = env.reset()
-
-angle = np.deg2rad(45.0)
-sin, cos = np.sin(angle), np.cos(angle)
-action = {'heading': np.array([sin, cos], dtype=np.float32), 'boost': np.int32(0)}
-obs, reward, terminated, truncated, info = env.step(action)
 env.close()
 ```
 
@@ -113,7 +98,8 @@ env.close()
 
   - `step(action) -> tuple[Observation, float, bool, bool, dict]`
     - `action` expects a dict-like with:
-      - `heading`: numpy array shape `(1,)` with heading in radians (float32).
+      - `heading_cos`: numpy array with the cosine of the heading angle (shape `(1,)`)
+      - `heading_sin`: numpy array with the sine of the heading angle (shape `(1,)`)
       - `boost`: discrete flag `0` or `1` (int32).
     - Returns `(observation, reward, terminated, truncated, info)`.
     - Reward is computed from the change in in-game score and normalised
@@ -122,17 +108,18 @@ env.close()
   - `render()` — currently a stub (returns `None`).
   - `close()` — closes the underlying `GameSession`.
 
-- **Observation structure** (see [src/slither_gym/game/types.py](src/slither_gym/game/types.py#L1))
-  - `player_snake` (TypedDict `Snake`)
-  - `enemy_snakes` (list of `Snake`)
+- **Observation structure** (see [src/slither_gym/envs/_spaces.py](src/slither_gym/game/types.py#L1))
+  - `player` (TypedDict `Slither`)
+  - `enemies` (list of `Slither`)
   - `food` (list of `Food`)
   - `minimap` (list of `MinimapSector`) — normalised to [-1, 1]
-  - `world_center`, `world_radius` (ints)
-  - `time_since_last_decision` (float)
+  - `nearest_border_sin`, `nearest_border_cos`, `distance_to_border`,
+    `time_since_last_decision` (floats)
 
 - **Action structure**
-  - `heading`: numpy array with a single scalar in radians (shape `(1,)`)
-  - `boost`: `0` or `1` (int)
+  - `heading_cos`: numpy array with the cosine of the heading angle (shape `(1,)`)
+  - `heading_sin`: numpy array with the sine of the heading angle (shape `(1,)`)
+  - `boost`: `0` or `1` (int8)
 
 - **GameSession** (Playwright controller — see [src/slither_gym/game/game_session.py](src/slither_gym/game/game_session.py#L1))
   - Constructor options: `headless`, `slither_base_url`, `viewport`.

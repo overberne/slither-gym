@@ -1,35 +1,25 @@
-/**
- * Converts the pts (segments) of a slither into segments
- * with relative positions to the previous segment.
- *
- * This excludes the head as it would always be (0, 0)
- * @param {Array<{xx: number, yy: number}>} pts - the `pts` property from a slither object
- * @returns {Array<{dx: number, dy: number}>}
- */
-function getRelativeSegments(pts) {
-  // var segments = [{ dx: 0, dy: 0 }];
-  const segments = [];
-  if (!pts || pts.length < 2) return segments;
-
-  for (var i = 1; i < pts.length; i++) {
-    segments.push({
-      dx: pts[i].xx - pts[i - 1].xx,
-      dy: pts[i].yy - pts[i - 1].yy,
-    });
-  }
-
-  return segments;
-}
-
 window.__pollObservation = function () {
   const sct = slither.sct + slither.rsc; // From game.js
   const out = {
-    player_snake: {},
-    enemy_snakes: [],
-    food: [],
-    score: Math.floor((fpsls[sct] + slither.fam / fmlts[sct] - 1) * 15 - 5),
-    world_center: grd,
-    world_radius: real_flux_grd,
+    player: {},
+    enemies: {
+      xx: [],
+      yy: [],
+      speed: [],
+      heading: [],
+      length: [],
+      boosting: [],
+      segments_x: [],
+      segments_y: [],
+    },
+    food: {
+      xx: [],
+      yy: [],
+      size: [],
+    },
+    score: 0,
+    world_center: 0,
+    world_radius: 0,
     minimap: [],
     terminated: false,
   };
@@ -42,31 +32,34 @@ window.__pollObservation = function () {
     return out;
   }
 
+  out.score = Math.floor((fpsls[sct] + slither.fam / fmlts[sct] - 1) * 15 - 5);
+  out.world_center = grd;
+  out.world_radius = real_flux_grd;
+
   // Snakes
+  out.player = {
+    xx: slither.xx,
+    yy: slither.yy,
+    speed: slither.sp || 0,
+    heading: slither.ang || 0,
+    length: slither.pts?.length || 0,
+    boosting: slither.md,
+    segments_x: slither.pts.map((s) => s.xx),
+    segments_y: slither.pts.map((s) => s.yy),
+  };
   for (var i = 0; i < slithers.length; i++) {
     const s = slithers[i];
     // iiv = is in view
-    if (!s || !s.alive || !o.iiv) continue;
+    if (!s || !s.alive || !o.iiv || s === slither) continue;
 
-    const snake = {
-      x: s.xx,
-      y: s.yy,
-      speed: s.sp || 0.0,
-      heading: s.ang || 0.0,
-      intended_heading: s.eang || 0.0,
-      length: (s.pts?.length || 0.0).toFixed(1),
-      boosting: s.md,
-      segments: getRelativeSegments(s.pts),
-    };
-
-    if (s === slither) {
-      out.player_snake = snake;
-    } else {
-      // Enemy snake position relative to player snake
-      snake.xx -= out.player_snake.xx;
-      snake.yy -= out.player_snake.yy;
-      out.enemy_snakes.push(snake);
-    }
+    out.enemies.xx.push(s.xx);
+    out.enemies.yy.push(s.yy);
+    out.enemies.speed.push(s.speed || 0);
+    out.enemies.heading.push(s.heading || 0);
+    out.enemies.length.push(s.pts?.length || 0);
+    out.enemies.boosting.push(s.md);
+    out.enemies.xx.push(s.pts.map((s) => s.xx));
+    out.enemies.xx.push(s.pts.map((s) => s.yy));
   }
 
   // Food filtering bounds
@@ -78,8 +71,30 @@ window.__pollObservation = function () {
   // Food
   for (var i = foods_c - 1; i >= 0; i--) {
     const fo = foods[i];
-    if (fo.rx >= fpx1 && fo.ry >= fpy1 && fo.rx <= fpx2 && fo.ry <= fpy2) {
-      out.food.push({ x: fo.xx, y: fo.yy, size: fo.sz });
+    if (
+      !fo.eaten &&
+      fo.rx >= fpx1 &&
+      fo.ry >= fpy1 &&
+      fo.rx <= fpx2 &&
+      fo.ry <= fpy2
+    ) {
+      out.food.xx.push(fo.xx);
+      out.food.yy.push(fo.yy);
+      out.food.size.push(fo.sz);
+    }
+  }
+  for (var i = preys.length - 1; i >= 0; i--) {
+    const pr = preys[i];
+    if (
+      !pr.eaten &&
+      pr.rx >= fpx1 &&
+      pr.ry >= fpy1 &&
+      pr.rx <= fpx2 &&
+      pr.ry <= fpy2
+    ) {
+      out.food.xx.push(pr.xx);
+      out.food.yy.push(pr.yy);
+      out.food.size.push(pr.sz);
     }
   }
 

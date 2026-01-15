@@ -1,13 +1,12 @@
 import time
 import warnings
-from typing import TypedDict
+from typing import Any, TypedDict
 
-from playwright.sync_api import Browser, Page, Playwright, sync_playwright
+from playwright.sync_api import Browser, Page, sync_playwright
 
 from slither_gym.game.constants import DEFAULT_BASE_URL
 from slither_gym.game.enums import GameState
 from slither_gym.game.hooks import GameFunctions, GameHooks
-from slither_gym.game.types import GameObservation
 
 
 class ViewportSize(TypedDict):
@@ -76,7 +75,8 @@ class GameSession:
 
     def close(self) -> None:
         self._page.close()
-        self._browser.close()
+        if self._browser:
+            self._browser.close()
 
     def act(self, angle_rad: float, enable_boost: bool) -> None:
         self._page.evaluate(GameFunctions.ACT(angle_rad, enable_boost))
@@ -87,7 +87,7 @@ class GameSession:
     def set_boost(self, enabled: bool) -> None:
         self._page.evaluate(GameFunctions.SET_BOOST(enabled))
 
-    def poll_observation(self) -> GameObservation:
+    def poll_observation(self) -> dict[str, Any]:
         return self._page.evaluate(GameFunctions.POLL_OBSERVATION)
 
     def get_player_count(self) -> int:
