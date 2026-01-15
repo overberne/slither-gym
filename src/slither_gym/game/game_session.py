@@ -28,7 +28,8 @@ class GameSession:
     Python-native types.
     """
 
-    _browser: Browser | None
+    _is_browser_owned: bool = False
+    _browser: Browser
     _page: Page
 
     def __init__(
@@ -66,6 +67,7 @@ class GameSession:
                 headless=headless, args=['--disable-web-security']
             )
             self._browser = browser
+            self._is_browser_owned = True
 
         self._page = browser.new_page(viewport=viewport)
         self._page.goto(slither_base_url)
@@ -75,7 +77,7 @@ class GameSession:
 
     def close(self) -> None:
         self._page.close()
-        if self._browser:
+        if self._is_browser_owned and self._browser:
             self._browser.close()
 
     def act(self, angle_rad: float, enable_boost: bool) -> None:
