@@ -1,7 +1,8 @@
 from gymnasium.envs.registration import register  # pyright: ignore[reportUnknownVariableType]
 
-from slither_gym.envs.slither_env import Action, Observation, SlitherEnv
+from slither_gym.envs.slither_env import SlitherEnv
 from slither_gym.game import DEFAULT_BASE_URL
+from slither_gym.spaces import Action, Observation
 
 register(
     id='slither_gym/Slither-v0',

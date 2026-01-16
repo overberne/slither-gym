@@ -5,7 +5,8 @@ import gymnasium as gym
 import numpy as np
 from numpy.typing import NDArray
 
-from slither_gym.envs._spaces import (
+from slither_gym.game import DEFAULT_BASE_URL, GameSession, GameState
+from slither_gym.spaces import (
     Action,
     Food,
     MinimapSector,
@@ -15,12 +16,11 @@ from slither_gym.envs._spaces import (
     new_action_space,
     new_observation_space,
 )
-from slither_gym.game import DEFAULT_BASE_URL, GameSession, GameState
 
 # Normalising constants
-SLITHER_LENGTH_NORM = np.float32(50_000)
 DISTANCE_NORM = PERCEPTION_RADIUS = np.float32(10_000)  # Used for normalising all distances
 FOOD_SIZE_NORM = np.float32(50)
+SLITHER_LENGTH_NORM = np.float32(50_000)
 SPEED_NORM = np.float32(14)
 
 
@@ -159,7 +159,7 @@ class SlitherEnv(gym.Env[Observation, Action]):
 
     def reset(
         self, *, seed: int | None = None, options: dict[str, Any] | None = None
-    ) -> tuple[Any, dict[str, Any]]:
+    ) -> tuple[Observation, dict[str, Any]]:
         """
         Reset the environment and start (or restart) a game session.
 
@@ -475,11 +475,13 @@ def _map_minimap_sector(sector: dict[str, Any]) -> MinimapSector:
     )
 
 
-class SpaceMismatch(Exception):
-    """Raised when an observation does not match a Gymnasium space."""
-
-    pass
-
+__all__ = [
+    'SlitherEnv',
+    'SPEED_NORM',
+    'SLITHER_LENGTH_NORM',
+    'DISTANCE_NORM',
+    'PERCEPTION_RADIUS',
+]
 
 if __name__ == '__main__':
     env = SlitherEnv(render_mode='human', nickname='foo')
